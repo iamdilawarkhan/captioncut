@@ -1,0 +1,6 @@
+# Signing keystore and built APKs are never committed.
+keystore/
+deliver/
+build/
+*.apk
+*.idsig
