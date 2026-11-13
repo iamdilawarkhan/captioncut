@@ -1,13 +1,17 @@
 package com.captioncut.app;
 
 import android.app.Activity;
+import android.app.DownloadManager;
+import android.content.BroadcastReceiver;
 import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -30,6 +34,7 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.os.ParcelFileDescriptor;
 import android.provider.MediaStore;
+import android.provider.Settings;
 import android.util.Base64;
 import android.util.Log;
 import android.webkit.JavascriptInterface;
@@ -80,6 +85,12 @@ public class MainActivity extends Activity {
     private volatile boolean exportCancel = false;
     private volatile boolean exportRunning = false;
     private String lastExportUri = "";
+
+    // v1.15: in-app update download — DownloadManager id + receiver.
+    private long updateDownloadId = -1;
+    private String updateDownloadUrl = "";
+    private BroadcastReceiver updateDownloadReceiver = null;
+    private boolean updateReceiverRegistered = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -1302,6 +1313,137 @@ public class MainActivity extends Activity {
         });
     }
 
+    // v1.15: one-tap in-app update — DownloadManager downloads the APK
+    // inside the app (NO browser); when it finishes, the install pop-up
+    // appears in front. Re-tapping Update installs the already-downloaded
+    // APK instead of downloading again. Same keystore = installs over the
+    // old version, no uninstall.
+    private static final String UPDATE_APK_NAME = "CaptionCut-update.apk";
+
+    private void downloadUpdateApk(final String url) {
+        runOnUiThread(() -> {
+            try {
+                if (url == null || url.isEmpty()) { toast("Update link nahi mila"); return; }
+                // Release-page fallback (no .apk asset): open in the browser.
+                if (!url.toLowerCase().endsWith(".apk")) { openUrlInBrowser(url); return; }
+                SharedPreferences p = getSharedPreferences("captioncut", MODE_PRIVATE);
+                long savedId = p.getLong("update_download_id", -1);
+                String savedUrl = p.getString("update_download_url", "");
+                DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+                if (dm == null) { openUrlInBrowser(url); return; }
+                if (savedId != -1 && url.equals(savedUrl)) {
+                    int st = queryDownloadStatus(dm, savedId);
+                    if (st == DownloadManager.STATUS_SUCCESSFUL) {
+                        updateDownloadId = savedId; updateDownloadUrl = url;
+                        installDownloadedApk(); return;
+                    }
+                    if (st == DownloadManager.STATUS_RUNNING || st == DownloadManager.STATUS_PAUSED
+                            || st == DownloadManager.STATUS_PENDING) {
+                        toast("Download ho raha hai — thodi der rukho"); return;
+                    }
+                    // FAILED or unknown: fall through and re-download.
+                }
+                File dest = new File(getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), UPDATE_APK_NAME);
+                try { if (dest.exists()) dest.delete(); } catch (Exception ignored) { }
+                DownloadManager.Request req = new DownloadManager.Request(Uri.parse(url));
+                req.setTitle("CaptionCut Update");
+                req.setDescription("Naya version download ho raha hai…");
+                req.setMimeType("application/vnd.android.package-archive");
+                req.setDestinationInExternalFilesDir(MainActivity.this, Environment.DIRECTORY_DOWNLOADS, UPDATE_APK_NAME);
+                req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+                req.setAllowedOverMetered(true);
+                req.setAllowedOverRoaming(false);
+                long id = dm.enqueue(req);
+                updateDownloadId = id;
+                updateDownloadUrl = url;
+                p.edit().putLong("update_download_id", id).putString("update_download_url", url).apply();
+                registerUpdateReceiver();
+                toast("Download shuru ho gaya ✔");
+            } catch (Exception e) {
+                openUrlInBrowser(url);
+            }
+        });
+    }
+
+    private int queryDownloadStatus(DownloadManager dm, long id) {
+        Cursor c = null;
+        try {
+            DownloadManager.Query q = new DownloadManager.Query().setFilterById(id);
+            c = dm.query(q);
+            if (c != null && c.moveToFirst()) {
+                return c.getInt(c.getColumnIndex(DownloadManager.COLUMN_STATUS));
+            }
+        } catch (Exception ignored) { }
+        finally { if (c != null) c.close(); }
+        return -1;
+    }
+
+    private void registerUpdateReceiver() {
+        if (updateReceiverRegistered) return;
+        updateDownloadReceiver = new BroadcastReceiver() {
+            @Override public void onReceive(Context ctx, Intent intent) {
+                if (!DownloadManager.ACTION_DOWNLOAD_COMPLETE.equals(intent.getAction())) return;
+                long id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1);
+                if (id != updateDownloadId) return;
+                DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+                int st = dm == null ? -1 : queryDownloadStatus(dm, id);
+                unregisterUpdateReceiver();
+                if (st == DownloadManager.STATUS_SUCCESSFUL) {
+                    installDownloadedApk();
+                } else {
+                    toast("Download nahi ho saka — internet check kar ke dobara try karo");
+                    openUrlInBrowser(updateDownloadUrl);
+                }
+            }
+        };
+        try {
+            registerReceiver(updateDownloadReceiver, new IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE));
+            updateReceiverRegistered = true;
+        } catch (Exception ignored) { }
+    }
+
+    private void unregisterUpdateReceiver() {
+        if (!updateReceiverRegistered) return;
+        try { unregisterReceiver(updateDownloadReceiver); } catch (Exception ignored) { }
+        updateReceiverRegistered = false;
+        updateDownloadReceiver = null;
+    }
+
+    @Override
+    protected void onDestroy() {
+        unregisterUpdateReceiver();
+        super.onDestroy();
+    }
+
+    private void installDownloadedApk() {
+        runOnUiThread(() -> {
+            try {
+                if (!getPackageManager().canRequestPackageInstalls()) {
+                    Intent s = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                            Uri.parse("package:" + getPackageName()));
+                    s.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(s);
+                    toast("Pehle 'Allow from this source' ON karo, phir dobara Update dabao");
+                    return;
+                }
+                DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+                Uri uri = dm == null ? null : dm.getUriForDownloadedFile(updateDownloadId);
+                if (uri == null) { openUrlInBrowser(updateDownloadUrl); return; }
+                Intent i = new Intent(Intent.ACTION_VIEW);
+                i.setDataAndType(uri, "application/vnd.android.package-archive");
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                startActivity(i);
+            } catch (Exception e) {
+                openUrlInBrowser(updateDownloadUrl);
+            }
+        });
+    }
+
+    private void openUrlInBrowser(String url) {
+        try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))); }
+        catch (Exception e) { toast("Cannot open link"); }
+    }
+
     private static String readAllText(InputStream in) throws Exception {
         ByteArrayOutputStream bos = new ByteArrayOutputStream();
         byte[] buf = new byte[8192];
@@ -1548,11 +1690,13 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public void openUrl(String url) {
-            runOnUiThread(() -> {
-                try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))); }
-                catch (Exception e) { toast("Cannot open link"); }
-            });
+            runOnUiThread(() -> MainActivity.this.openUrlInBrowser(url));
         }
+
+        // v1.15: Update button — download inside the app (no browser);
+        // the install pop-up appears when the download finishes.
+        @JavascriptInterface
+        public void downloadUpdate(String url) { downloadUpdateApk(url); }
 
         // v1.14: manual update check from Settings — always answers with
         // a banner (if newer) or a toast (latest / failed).
