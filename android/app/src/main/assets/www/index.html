@@ -899,16 +899,18 @@ function openSettings(){
   document.getElementById('modelId').value=Android.getModelId();
   document.getElementById('modal').classList.add('open');
 }
-// v1.14: update banner — called from Java when GitHub has a newer release.
-// Update opens the APK download (same keystore = installs over the old
-// version, no uninstall); Later just hides the banner for this launch.
+// v1.15: update banner — called from Java when GitHub has a newer release.
+// Update downloads the APK inside the app (DownloadManager, no browser)
+// and the install pop-up appears when the download finishes. Same
+// keystore = installs over the old version, no uninstall; Later just
+// hides the banner for this launch.
 window.__updUrl='';
 window.showUpdateBanner=function(ver,url){
   window.__updUrl=url;
   document.getElementById('updTxt').textContent='✦ New version '+ver+' available';
   document.getElementById('updBanner').classList.add('show');
 };
-function updateNow(){ if(window.__updUrl){ try{ Android.openUrl(window.__updUrl); }catch(e){} } }
+function updateNow(){ if(window.__updUrl){ try{ Android.downloadUpdate(window.__updUrl); }catch(e){ try{ Android.openUrl(window.__updUrl); }catch(e2){} } } }
 function hideUpdBanner(){ document.getElementById('updBanner').classList.remove('show'); }
 function closeSettings(){ document.getElementById('modal').classList.remove('open'); }
 function saveKey(){ Android.setKey(document.getElementById('apiKey').value); document.getElementById('keyStatus').textContent='Saved ✔'; }
