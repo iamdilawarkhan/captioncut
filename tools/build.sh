@@ -32,7 +32,7 @@ $AAPT2 link -o $M/base.apk \
   -A $APP/assets \
   --java $M/gen \
   --min-sdk-version 26 --target-sdk-version 34 \
-  --version-code 15 --version-name 1.14 \
+  --version-code 16 --version-name 1.15 \
   $M/compiled_res/app.zip
 echo "LINK DONE"; ls -la $M/base.apk
 
@@ -60,9 +60,9 @@ cp $M/base.apk $M/unaligned.apk
 (cd $M/dex && zip -q -0 $M/unaligned.apk classes.dex)
 $BT/zipalign -f 4 $M/unaligned.apk $M/aligned.apk
 $BT/apksigner sign --ks $KS --ks-pass "pass:$CAPTIONCUT_KS_PASS" \
-  --key-pass "pass:$CAPTIONCUT_KS_PASS" --out $BASE/deliver/CaptionCut-v1.14-debug.apk $M/aligned.apk
+  --key-pass "pass:$CAPTIONCUT_KS_PASS" --out $BASE/deliver/CaptionCut-v1.15-debug.apk $M/aligned.apk
 
 echo "== verify =="
-$BT/apksigner verify --print-certs $BASE/deliver/CaptionCut-v1.14-debug.apk 2>&1 | head -3
-$BT/aapt dump badging $BASE/deliver/CaptionCut-v1.14-debug.apk 2>/dev/null | head -5
+$BT/apksigner verify --print-certs $BASE/deliver/CaptionCut-v1.15-debug.apk 2>&1 | head -3
+$BT/aapt dump badging $BASE/deliver/CaptionCut-v1.15-debug.apk 2>/dev/null | head -5
 ls -la $BASE/deliver/
