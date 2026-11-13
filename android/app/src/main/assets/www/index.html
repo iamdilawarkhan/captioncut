@@ -1,0 +1,959 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>CaptionCut</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0C0C13;color:#F1F2F6;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;font-size:16px;padding-bottom:32px}
+html,body{overflow-x:hidden;overflow-x:clip}
+header{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px 16px 8px}
+/* v1.6: STICKY STAGE — header + video preview stay pinned at the top while
+   the Generate card and settings scroll underneath. Solid background so
+   scrolled content never shows through; the caption (bottom of the video
+   frame) can never slide under the header or be clipped by the screen edge. */
+#stage{position:sticky;top:0;z-index:30;background:#0C0C13;padding-bottom:10px;border-bottom:1px solid #1E1E2E;box-shadow:0 10px 24px rgba(0,0,0,.35)}
+header h1{font-size:28px;font-weight:800;letter-spacing:.3px}
+/* v1.13: credit line under the title — small gradient text + thin fading
+   divider, premium and subtle; adds ~17px to the header, gear (absolute,
+   top:18px) stays aligned with the title row. UI only — never drawn in
+   exported videos (drawCaption only draws caption text). */
+.credit{font-size:12px;letter-spacing:1.4px;margin-top:5px;white-space:nowrap;background:linear-gradient(90deg,#A78BFA,#22D3EE);-webkit-background-clip:text;background-clip:text;color:transparent}
+.creditRule{width:56px;height:1.5px;margin-top:6px;border-radius:2px;background:linear-gradient(90deg,transparent,#7C3AED,#06B6D4,transparent)}
+/* v1.14: update banner — hidden until a newer GitHub release is found.
+   Sits under the header inside the sticky stage, so it stays visible. */
+#updBanner{display:none;margin:12px 16px 0;background:linear-gradient(90deg,rgba(124,58,237,.28),rgba(6,182,212,.28));border:1px solid #7C3AED;border-radius:14px;padding:12px 14px;align-items:center;gap:10px}
+#updBanner.show{display:flex}
+#updBanner .t{flex:1;font-size:15px;font-weight:700;line-height:1.4}
+#updBanner .t small{display:block;font-weight:400;color:#C7CFE8;font-size:13px;margin-top:2px}
+#updBanner .btn{min-height:44px;padding:10px 16px}
+#updBanner .x{background:none;border:0;color:#9AA5C4;font-size:20px;cursor:pointer;padding:6px}
+.gear{position:absolute;right:16px;top:18px;width:44px;height:44px;border-radius:50%;background:#1E1E2E;border:1px solid #2E2E40;color:#E5E7EB;font-size:20px;cursor:pointer}
+.btn{background:#7C3AED;color:#fff;border:0;border-radius:14px;padding:12px 18px;font-size:16px;font-weight:700;cursor:pointer;min-height:52px;text-align:center}
+.btn.ghost{background:#1E2440;color:#E5E7EB}
+.btn.danger{background:#DC2626}
+.btn.small{padding:10px 14px;font-size:15px;border-radius:10px;min-height:44px}
+.btn.grad{width:100%;min-height:62px;font-size:20px;border-radius:16px;background:linear-gradient(90deg,#7C3AED,#06B6D4 50%,#EC4899);box-shadow:0 10px 26px rgba(124,58,237,.45)}
+.btn:disabled{opacity:.45}
+/* ---- import zone: one big dashed box (the mockup) ---- */
+#importZone{margin:12px 16px 0;border:2px dashed #3D3D52;border-radius:26px;background:#101019;padding:26px 16px;min-height:360px;display:flex;flex-direction:column;align-items:center;justify-content:center}
+#importEmpty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;cursor:pointer;width:100%}
+.plusBox{width:108px;height:108px;border-radius:28px;display:flex;align-items:center;justify-content:center;font-size:64px;font-weight:200;color:#fff;line-height:1;background:linear-gradient(#1E1E2E,#1E1E2E) padding-box,linear-gradient(135deg,#7C3AED,#06B6D4,#EC4899) border-box;border:3px solid transparent;box-shadow:0 0 34px rgba(124,58,237,.55)}
+.importTitle{font-size:26px;font-weight:800}
+.importSub{font-size:15px;color:#9AA5C4}
+#importVideo{display:none;width:100%;flex-direction:column;align-items:center}
+#vidWrap{position:relative;background:#000;border-radius:16px;overflow:hidden;margin:0 auto;box-shadow:0 10px 28px rgba(0,0,0,.45)}
+#vid{width:100%;height:100%;object-fit:contain;display:block;background:#000}
+/* v1.8: the overlay is SHRINK-TO-FIT the pill (width:max-content) and is
+   always positioned by explicit left/top px (see applyCapPos) — the old
+   full-width band (left:4%;right:4%) is what let a dragged pill push
+   words off-frame. The overlay is positioned by its CENTRE; see dragCap. */
+#capOverlay{position:absolute;left:0;top:0;width:max-content;max-width:92%;text-align:center;padding:0;pointer-events:auto;font-weight:700;line-height:1.35;text-shadow:0 1px 4px rgba(0,0,0,.7);white-space:nowrap;overflow:hidden;cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;z-index:3}
+#capOverlay.dragging{cursor:grabbing}
+#capGrip{position:absolute;z-index:5;font-size:12px;letter-spacing:2px;color:#fff;opacity:.55;pointer-events:none;line-height:1;text-shadow:0 1px 3px rgba(0,0,0,.8)}
+/* v1.8: centre guides + snap badge — visible ONLY while dragging. The
+   guides are faint dashed; the snapped one turns solid cyan. */
+#capGuideV{position:absolute;top:0;bottom:0;left:50%;width:0;border-left:2px dashed rgba(255,255,255,.30);display:none;pointer-events:none;z-index:2}
+#capGuideH{position:absolute;left:0;right:0;top:50%;height:0;border-top:2px dashed rgba(255,255,255,.30);display:none;pointer-events:none;z-index:2}
+#capGuideV.snap{border-left:2px solid #06B6D4;box-shadow:0 0 10px rgba(6,182,212,.9)}
+#capGuideH.snap{border-top:2px solid #06B6D4;box-shadow:0 0 10px rgba(6,182,212,.9)}
+#capCenterBadge{position:absolute;top:8px;left:50%;transform:translateX(-50%);background:rgba(6,182,212,.95);color:#fff;font-size:12px;font-weight:800;padding:4px 12px;border-radius:12px;display:none;pointer-events:none;z-index:6;box-shadow:0 0 14px rgba(6,182,212,.8);white-space:nowrap}
+/* v1.12: "New Video" option — appears ON the video when you tap the loaded
+   video again. One compact button, centred on the frame; tapping it
+   re-opens the gallery picker through the existing import flow
+   (Android.pickVideo -> __onVideo). Hidden by default; never shown when
+   no video is loaded (it lives inside #importVideo, display:none then). */
+#newVidBtn{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:7;display:none;background:linear-gradient(90deg,#7C3AED,#06B6D4);color:#fff;border:0;border-radius:999px;padding:13px 22px;font-size:17px;font-weight:800;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.55);white-space:nowrap}
+#capText{display:inline-block;max-width:100%;overflow:hidden;white-space:nowrap}
+#capOverlay .bg{background:rgba(0,0,0,.65);padding:2px 10px;border-radius:8px;display:inline-block;max-width:100%;overflow:hidden;white-space:nowrap}
+#capOverlay .hl{color:#FFD60A}
+#seekRow{display:flex;align-items:center;gap:12px;margin-top:14px;width:100%}
+#seek{flex:1;accent-color:#7C3AED;min-height:32px}
+#timeLbl{font-size:14px;color:#A5B4D4;min-width:100px;text-align:right;font-variant-numeric:tabular-nums}
+#playBtn{width:52px;height:52px;border-radius:50%;background:#7C3AED;color:#fff;border:0;font-size:20px;flex:none}
+#info{font-size:14px;color:#9AA5C4;margin-top:10px;text-align:center;cursor:pointer}
+#info b{color:#E5E7EB}
+.errline{color:#FF8A8A;background:rgba(220,38,38,.14);border:1px solid #DC2626;border-radius:10px;padding:10px 12px;font-size:14px;line-height:1.5;margin:16px 16px 0}
+.seg{display:flex;gap:10px;align-items:center;background:#1E2440;border:1px solid #2E3555;border-radius:12px;padding:12px;margin-bottom:10px;font-size:15px}
+.seg span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* ---- bottom-sheet card (the mockup) ---- */
+.card{margin:16px;background:#17171F;border:1px solid #2B2B3A;border-radius:24px;padding:8px 16px 20px;box-shadow:0 10px 28px rgba(0,0,0,.35)}
+.handle{width:44px;height:5px;border-radius:3px;background:#3A3A4A;margin:8px auto 16px}
+.card h2{font-size:22px;font-weight:800;margin-bottom:16px}
+.langRow{display:flex;align-items:center;gap:12px;background:#23232F;border:1px solid #33333F;border-radius:14px;padding:0 14px;margin-bottom:16px}
+.langRow .globe{font-size:20px}
+.langRow select{flex:1;background:none;border:0;color:#F1F2F6;font-size:17px;padding:16px 0;appearance:none;-webkit-appearance:none;outline:none}
+.langRow select option{background:#23232F}
+.langRow .chev{color:#9AA5C4;font-size:14px}
+.checkRow{display:flex;align-items:center;gap:12px;margin-top:16px;cursor:pointer;font-size:16px}
+.checkRow input{appearance:none;-webkit-appearance:none;width:26px;height:26px;border:2px solid #55556A;border-radius:8px;background:#23232F;flex:none;cursor:pointer;position:relative}
+.checkRow input:checked{background:linear-gradient(135deg,#7C3AED,#06B6D4);border-color:#06B6D4}
+.checkRow input:checked:after{content:'✓';position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;font-size:16px;font-weight:800}
+#capStatus{font-size:14px;color:#9AA5C4;margin-top:12px;min-height:18px}
+/* ---- caption list / modes / presets ---- */
+.presets{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:6px}
+/* v1.6: min-width:0 is the actual fix for the cut-off 3rd card. Grid/flex
+   items default to min-width:auto, so the unbroken Urdu sample ("السلام
+   علیکم دوستو") forced its track wider than 1fr and the whole grid spilled
+   past the right screen edge. With min-width:0 the 3 columns stay exactly
+   1fr each inside the 16px margins, and the sample shrinks instead. */
+.preset{background:#1E2440;border:2px solid #2E3555;border-radius:14px;padding:14px 8px;text-align:center;cursor:pointer;min-height:64px;min-width:0;display:flex;flex-direction:column;gap:5px;align-items:center;justify-content:center;transition:transform .15s,box-shadow .15s,border-color .15s}
+.preset>*{min-width:0}
+.preset.on{border:2px solid transparent;background:linear-gradient(#1B2A52,#1B2A52) padding-box,linear-gradient(135deg,#7C3AED,#06B6D4,#EC4899) border-box;box-shadow:0 8px 22px rgba(124,58,237,.45);transform:translateY(-2px)}
+.preset .sample{font-size:19px;font-weight:800;white-space:nowrap;overflow:hidden;max-width:100%;min-width:0;width:100%;display:block;line-height:1.5}
+.preset .nm{font-size:14px;color:#E5E7EB}
+#liveDemo{background:#0F1220;border:1px solid #2E3555;border-radius:14px;padding:12px 10px;text-align:center;overflow:hidden;white-space:nowrap;margin-bottom:12px;min-height:54px;display:flex;align-items:center;justify-content:center}
+#liveDemoText{display:inline-block;max-width:100%;min-width:0;overflow:hidden;white-space:nowrap;font-weight:700;line-height:1.4}
+#liveDemoText .bg{background:rgba(0,0,0,.65);padding:2px 10px;border-radius:8px;display:inline-block;max-width:100%;overflow:hidden;white-space:nowrap}
+#liveDemoText .hl{color:#FFD60A}
+.capItem{background:#1E2440;border:1px solid #2E3555;border-radius:12px;padding:10px 12px;margin-bottom:8px}
+.capItem .meta{display:flex;gap:8px;align-items:center;margin-bottom:6px}
+.capItem .meta input{width:76px;background:#0F1220;border:1px solid #2E3555;color:#F1F2F6;border-radius:8px;padding:8px;font-size:15px}
+.capItem textarea{width:100%;background:#0F1220;border:1px solid #2E3555;color:#F1F2F6;border-radius:8px;padding:10px;font-size:16px;min-height:44px;resize:vertical;white-space:pre-wrap;overflow-wrap:break-word}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+.row label{font-size:15px;color:#C7CFE6;min-width:90px}
+.row input[type=text],.row input[type=number],.row select,.row textarea{background:#1E2440;border:1px solid #2E3555;color:#F1F2F6;border-radius:10px;padding:12px;font-size:16px;flex:1;min-width:120px;min-height:48px}
+.row input[type=range]{flex:1;min-width:0;accent-color:#06B6D4;min-height:32px}
+.row select{min-height:52px}
+/* v1.9: colour row is its own full-width line — the "Colour" label sits
+   above it and the 10 swatches share the whole card width (flex:1 each),
+   so the row runs edge to edge with no gap on the right. A 90px label in
+   the same row would have squeezed each swatch to ~17px (untappable);
+   the stacked label keeps them ~28px. */
+.swBlock{margin-bottom:10px}
+.swLbl{font-size:15px;color:#C7CFE6;margin-bottom:6px}
+#swatches{display:flex;gap:4px}
+.sw{flex:1 1 0;min-width:0;width:auto;height:26px;border-radius:50%;border:2px solid #2E3555;display:block;cursor:pointer;margin-right:0}
+.sw.on{border-color:#fff;box-shadow:0 0 0 3px rgba(6,182,212,.7),0 0 18px rgba(6,182,212,.9)}
+.chip{display:inline-block;background:#1E2440;border:1px solid #2E3555;border-radius:24px;padding:10px 14px;font-size:15px;margin:0 6px 6px 0;cursor:pointer;min-height:40px}
+.chip.on{background:#7C3AED;border-color:#7C3AED;color:#fff}
+/* v1.9: position chips stretch to fill the full row — three equal thirds,
+   no empty space on the right. */
+.posWrap{display:flex;flex:1;gap:6px;min-width:0}
+.posWrap .chip{flex:1;min-width:0;margin:0;text-align:center;padding:10px 6px;white-space:nowrap}
+/* v1.8: Bold + Highlight + Background in ONE row — three equal compact
+   tiles, each label + mini toggle. Same 'on' class as the old .switch,
+   so toggleSwitch/swOn/applyPreset/init keep working unchanged. */
+.togRow{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px}
+.tog{display:flex;flex-direction:column;align-items:center;gap:7px;background:#1E2440;border:2px solid #2E3555;border-radius:12px;padding:10px 4px 9px;font-size:13px;font-weight:700;color:#C7CFE6;cursor:pointer;min-width:0}
+.tog.on{border-color:#06B6D4;color:#fff;background:#1B2A52;box-shadow:0 4px 14px rgba(6,182,212,.25)}
+.tog .mini{position:relative;width:36px;height:20px;border-radius:12px;background:#2E3555;flex:none}
+.tog .mini:after{content:'';position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:left .15s}
+.tog.on .mini{background:#06B6D4}
+.tog.on .mini:after{left:18px}
+.tog .tl{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+#progressWrap{display:none;margin-top:12px}
+#progressBar{height:12px;background:#1E2440;border-radius:6px;overflow:hidden}
+#progressFill{height:100%;width:0%;background:#06B6D4}
+#progressMsg{font-size:14px;color:#A5B4D4;margin-top:8px}
+#result{margin-top:12px;font-size:15px;line-height:1.6}
+#modal{position:fixed;inset:0;background:rgba(0,0,0,.65);display:none;align-items:flex-end;z-index:50}
+#modal.open{display:flex}
+#modal .sheet{background:#141830;width:100%;border-radius:18px 18px 0 0;padding:18px 14px 26px;max-height:86vh;overflow:auto}
+#modal h3{font-size:18px;margin-bottom:12px}
+.kv{font-size:14px;color:#9AA5C4}
+input[type=color]{width:52px;height:44px;border:0;background:none;padding:0}
+.switch{position:relative;width:54px;height:32px;background:#2E3555;border-radius:20px;border:0;flex:none}
+.switch.on{background:#06B6D4}
+.switch:after{content:'';position:absolute;top:4px;left:4px;width:24px;height:24px;border-radius:50%;background:#fff;transition:left .15s}
+.switch.on:after{left:26px}
+</style>
+</head>
+<body>
+<div id="stage">
+<header>
+  <h1>Auto Captions</h1>
+  <div class="credit">✦ Designed by Dilawar Khan ✦</div>
+  <div class="creditRule"></div>
+  <button class="gear" onclick="openSettings()">⚙</button>
+</header>
+
+<div id="updBanner"><div class="t"><span id="updTxt"></span><small>GitHub se naya version aaya hai — ek tap me download karo</small></div><button class="btn" onclick="updateNow()">Update</button><button class="x" onclick="hideUpdBanner()" aria-label="Later">✕</button></div>
+
+<div id="importZone">
+  <div id="importEmpty" onclick="Android.pickVideo()">
+    <div class="plusBox">+</div>
+    <div class="importTitle">Import Your Video</div>
+    <div class="importSub">Tap to upload (MP4, MOV up to 10 mins)</div>
+  </div>
+  <div id="importVideo">
+    <div id="vidWrap">
+      <video id="vid" playsinline preload="auto"></video>
+      <div id="capOverlay"><span id="capText" dir="auto"></span></div>
+      <div id="capGrip" style="display:none">⋮⋮</div>
+      <div id="capGuideV"></div>
+      <div id="capGuideH"></div>
+      <div id="capCenterBadge">◉ Center</div>
+      <button id="newVidBtn" onclick="pickNewVideo()">＋ New Video</button>
+    </div>
+    <div id="seekRow">
+      <button id="playBtn" onclick="togglePlay()">▶</button>
+      <input type="range" id="seek" min="0" max="100" step="0.1" value="0" oninput="seekTo(this.value)">
+      <span id="timeLbl">0:00 / 0:00</span>
+    </div>
+    <div id="info" onclick="Android.pickVideo()"></div>
+  </div>
+</div>
+</div>
+<div id="importError" class="errline" style="display:none"></div>
+
+<div class="card">
+  <div class="handle"></div>
+  <h2>Generate Captions</h2>
+  <div class="langRow"><span class="globe">🌐</span>
+    <select id="capLang" onchange="Android.setLang(this.value)">
+      <option value="ur">Urdu (اردو)</option>
+      <option value="auto">Auto-detect</option>
+      <option value="en">English</option>
+      <option value="ro">Roman Urdu</option>
+    </select>
+    <span class="chev">▾</span>
+  </div>
+  <button class="btn grad" id="autoBtn" onclick="autoCaptions()">Generate Captions 🪄</button>
+  <label class="checkRow"><input type="checkbox" id="emojiChk" onchange="emojiChanged()"> <span>Include emojis &amp; styling 🎉</span></label>
+  <div id="capStatus"></div>
+</div>
+
+<div id="capsSection" style="display:none">
+  <div class="card">
+    <div id="liveDemo"><span id="liveDemoText" dir="auto"></span></div>
+    <div class="presets">
+      <div class="preset" id="md-word" onclick="setCapMode('word')"><span class="sample" id="md-s-word" dir="rtl">السلام</span><span class="nm">Single word</span></div>
+      <div class="preset" id="md-duo" onclick="setCapMode('duo')"><span class="sample" id="md-s-duo" dir="rtl">السلام علیکم</span><span class="nm">Duo word</span></div>
+      <div class="preset on" id="md-line" onclick="setCapMode('line')"><span class="sample" id="md-s-line" dir="rtl">السلام علیکم دوستو</span><span class="nm">Single line</span></div>
+    </div>
+    <div style="margin-top:12px">
+      <div class="row"><label>Size</label><input type="range" id="stSize" min="3" max="10" step="1" value="5" oninput="styleChanged()"><span id="stSizeLbl" class="kv">5%</span></div>
+      <div class="swBlock"><div class="swLbl">Colour</div><span id="swatches"><span class="sw on" data-c="#FFFFFF" style="background:#FFFFFF" onclick="setSwatch('#FFFFFF')"></span><span class="sw" data-c="#FFD60A" style="background:#FFD60A" onclick="setSwatch('#FFD60A')"></span><span class="sw" data-c="#FF9800" style="background:#FF9800" onclick="setSwatch('#FF9800')"></span><span class="sw" data-c="#F44336" style="background:#F44336" onclick="setSwatch('#F44336')"></span><span class="sw" data-c="#EC4899" style="background:#EC4899" onclick="setSwatch('#EC4899')"></span><span class="sw" data-c="#A855F7" style="background:#A855F7" onclick="setSwatch('#A855F7')"></span><span class="sw" data-c="#3B82F6" style="background:#3B82F6" onclick="setSwatch('#3B82F6')"></span><span class="sw" data-c="#06B6D4" style="background:#06B6D4" onclick="setSwatch('#06B6D4')"></span><span class="sw" data-c="#22C55E" style="background:#22C55E" onclick="setSwatch('#22C55E')"></span><span class="sw" data-c="#A3E635" style="background:#A3E635" onclick="setSwatch('#A3E635')"></span></span></div>
+      <div class="row"><label>Position</label><span class="posWrap"><button class="chip" id="pos-top" onclick="setPos('top')">Top</button><button class="chip" id="pos-center" onclick="setPos('center')">Center</button><button class="chip on" id="pos-bottom" onclick="setPos('bottom')">Bottom</button></span></div>
+      <div class="togRow" style="margin-bottom:0">
+        <button class="tog on" id="stBg" onclick="toggleSwitch('stBg',styleChanged)"><span class="mini"></span><span class="tl">Background</span></button>
+        <button class="tog on" id="stBold" onclick="toggleSwitch('stBold',styleChanged)"><span class="mini"></span><span class="tl">Bold</span></button>
+        <button class="tog on" id="stHl" onclick="toggleSwitch('stHl',styleChanged)"><span class="mini"></span><span class="tl">Highlight</span></button>
+      </div>
+      <input type="hidden" id="stColor" value="#FFFFFF">
+      <select id="stPos" style="display:none"><option value="bottom">Bottom</option><option value="center">Center</option><option value="top">Top</option></select>
+    </div>
+    <div id="capList"></div>
+    <div class="presets" style="margin-top:14px">
+      <div class="preset on" id="pr-white" onclick="applyPreset('white')"><span class="sample" style="color:#FFFFFF">Aa</span><span class="nm">White Bold</span></div>
+      <div class="preset" id="pr-yellow" onclick="applyPreset('yellow')"><span class="sample" style="color:#FFD60A">Aa</span><span class="nm">Yellow Pop</span></div>
+      <div class="preset" id="pr-big" onclick="applyPreset('big')"><span class="sample" style="color:#FFFFFF;font-size:24px">Aa</span><span class="nm">Big Text</span></div>
+    </div>
+  </div>
+</div>
+
+<div id="exportSection" style="display:none">
+  <div class="card">
+    <button class="btn grad" id="expBtn" onclick="doExport()">⬇ Export Video</button>
+    <div style="text-align:center"><button class="btn ghost" id="shareBtn" onclick="Android.shareLast()" style="display:none">↗ Share</button></div>
+    <div id="progressWrap"><div id="progressBar"><div id="progressFill"></div></div><div id="progressMsg"></div>
+    <div class="row" style="margin-top:8px"><button class="btn danger small" onclick="Android.cancelExport()">Cancel</button></div></div>
+    <div id="result"></div>
+  </div>
+</div>
+
+<div id="modal"><div class="sheet">
+  <h3>Settings</h3>
+  <div class="row"><label>Gemini API key</label><input type="text" id="apiKey" placeholder="Paste key"></div>
+  <div class="row"><button class="btn small" onclick="saveKey()">Save key</button><button class="btn ghost small" onclick="testKey()">Test my key</button><span class="kv" id="keyStatus"></span></div>
+  <div class="row"><label>Model</label><input type="text" id="modelId" value="gemini-2.5-flash"></div>
+  <div class="row"><button class="btn ghost small" onclick="saveModel()">Save model</button></div>
+  <div class="row"><label>App updates</label><button class="btn ghost small" onclick="Android.checkUpdateNow()">Check for updates</button></div>
+  <div class="row" style="margin-top:14px"><button class="btn" style="flex:1" onclick="closeSettings()">Done</button></div>
+</div></div>
+
+<script>
+let video=null, duration=0, trimStart=0, trimEnd=0;
+let ranges=[]; // keep ranges {start,end}
+let speed=1, rotate=0, mute=false;
+let captions=[]; // {start,end,text}
+let textOv={text:'',size:6,color:'#FFFFFF',position:'top'};
+let style={size:5,bold:true,color:'#FFFFFF',bg:true,position:'bottom',highlight:true,mode:'line',emojis:false};
+const vid=document.getElementById('vid');
+const vidWrap=document.getElementById('vidWrap');
+
+function fmt(t){t=Math.max(0,t||0);let m=Math.floor(t/60),s=Math.floor(t%60);return m+':'+(s<10?'0':'')+s;}
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+// v1.10: explicit text direction — do NOT trust dir="auto" alone for Urdu.
+// A chunk starting with an emoji/number/Latin char can resolve LTR and lay
+// the word spans out backwards (first spoken word on the left). Any Arabic/
+// Hebrew-block letter in the text => RTL, otherwise LTR (English/Roman Urdu).
+function isRtlText(s){
+  return /[\u0590-\u05FF\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/.test(String(s||''));
+}
+
+function toggleSwitch(id,after){const el=document.getElementById(id);el.classList.toggle('on');if(after)after();}
+function swOn(id){return document.getElementById(id).classList.contains('on');}
+
+// ---------- video frame ratio ----------
+// The preview box must hug the VIDEO frame, not a fixed 16:9 box: a 9:16
+// video stays tall, a 16:9 video stays wide, a square stays square.
+// The preview is COMPACT on purpose — max ~360px tall (40vh), width
+// from the video ratio, centred — so the controls stay visible on one
+// screen without scrolling.
+function fitWrap(w,h){
+  if(!w||!h) return;
+  vidWrap.style.aspectRatio = w+' / '+h;
+  const maxH = Math.min(320, Math.round(window.innerHeight*0.36));
+  const maxW = vidWrap.parentElement ? vidWrap.parentElement.clientWidth : 360;
+  let dispW = Math.round(maxH * w / h);
+  if (dispW > maxW) dispW = maxW;
+  const dispH = Math.round(dispW * h / w);
+  vidWrap.style.width = dispW + 'px';
+  vidWrap.style.height = dispH + 'px';
+}
+function fitWrapFromVideo(){
+  if(video && video.width && video.height){
+    let w=video.width, h=video.height;
+    if(video.rotation===90||video.rotation===270){ const t=w; w=h; h=t; }
+    fitWrap(w,h);
+  } else if(vid.videoWidth && vid.videoHeight){
+    fitWrap(vid.videoWidth, vid.videoHeight);
+  }
+}
+// Caption font base on screen: the frame's SHORT side, same rule as the
+// Java export (width when portrait, height when landscape).
+function previewBase(){
+  const w=vidWrap.clientWidth, h=vidWrap.clientHeight;
+  if(!w||!h) return w||200;
+  if(video && video.width && video.height){
+    const portrait = (video.rotation===90||video.rotation===270)
+      ? video.height < video.width : video.width < video.height;
+    return portrait ? w : h;
+  }
+  return Math.min(w,h);
+}
+
+// ---------- video ----------
+// Import failures show a red line under the import zone (Java calls this);
+// a successful import clears it.
+window.__importError=function(m){
+  const el=document.getElementById('importError');
+  el.textContent='❌ '+m; el.style.display='block';
+};
+// v1.8: on resize/rotate, re-apply the caption position (left/top are px,
+// so a frame-size change would otherwise leave a dragged caption stale).
+window.addEventListener('resize', function(){ fitWrapFromVideo(); if(!dragCap) updateCaptionOverlay(vid.currentTime||0); });
+window.__onVideo=function(infoJson){
+  const info=JSON.parse(infoJson);
+  document.getElementById('importError').style.display='none';
+  video=info; duration=info.duration||0;
+  trimStart=0; trimEnd=duration; ranges=[{start:0,end:duration}];
+  captions=[]; rotate=0; speed=1; mute=false;
+  vid.src='file://'+info.path;
+  vid.load();
+  primed=false;
+  hideNewVidOpt(); // v1.12: a fresh import never shows the option
+  fitWrapFromVideo();
+  document.getElementById('importEmpty').style.display='none';
+  document.getElementById('importVideo').style.display='flex';
+  // After import the zone hugs its content (no big empty min-height),
+  // so title + preview + Generate card fit on one screen.
+  document.getElementById('importZone').style.minHeight='0';
+  document.getElementById('exportSection').style.display='block';
+  document.getElementById('info').innerHTML='<b>'+esc(info.name)+'</b> · '+fmt(duration);
+  renderCaps();
+  document.getElementById('timeLbl').textContent='0:00 / '+fmt(duration);
+};
+// Prime the first frame: seek a fraction in once metadata is ready so the
+// video actually PAINTS while paused (a 0:00 black frame / empty grey box
+// is not a preview). Guarded so it runs once per import.
+let primed=false;
+vid.addEventListener('loadedmetadata',()=>{ if(duration===0){duration=vid.duration||0;} fitWrapFromVideo(); if(!primed){primed=true; try{vid.currentTime=0.1;}catch(e){}} });
+vid.addEventListener('loadeddata',()=>{ if(!primed && vid.readyState>=2){primed=true; try{vid.currentTime=0.1;}catch(e){}} });
+vid.addEventListener('timeupdate',()=>{
+  const t=vid.currentTime;
+  document.getElementById('seek').value = duration? (t/duration*100):0;
+  document.getElementById('timeLbl').textContent=fmt(t)+' / '+fmt(duration);
+  if(t>=trimEnd && !vid.paused){ vid.currentTime=trimStart; }
+  updateCaptionOverlay(t);
+});
+vid.addEventListener('ended',()=>{document.getElementById('playBtn').textContent='▶';});
+// v1.12: tapping the loaded video again shows the "＋ New Video" option ON
+// the video — it NO LONGER toggles play/pause. Play/pause lives only on
+// the big purple play button + timeline below the preview (togglePlay).
+// Only a plain TAP (down+up, <8px movement) shows the option; a drag or
+// scroll never does. Tapping the video again hides it.
+let vidTap=null; // {x,y} of the last pointerdown on the video
+vid.addEventListener('pointerdown', function(e){ vidTap={x:e.clientX, y:e.clientY}; });
+vid.addEventListener('pointerup', function(e){
+  if(!vidTap || !video){ vidTap=null; return; }
+  const moved=Math.hypot(e.clientX-vidTap.x, e.clientY-vidTap.y);
+  vidTap=null;
+  if(moved<8) toggleNewVidOpt();
+});
+vid.addEventListener('pointercancel', function(){ vidTap=null; });
+// v1.12: the "New Video" option — one compact button centred on the video.
+// Tapping it re-opens the gallery picker through the EXISTING import flow
+// (Android.pickVideo -> __onVideo: new preview, old captions cleared).
+// Tapping anywhere else on the page dismisses the option.
+function newVidOptShown(){ const b=document.getElementById('newVidBtn'); return !!b && b.style.display!=='none'; }
+function showNewVidOpt(){ const b=document.getElementById('newVidBtn'); if(b && video) b.style.display='block'; }
+function hideNewVidOpt(){ const b=document.getElementById('newVidBtn'); if(b) b.style.display='none'; }
+function toggleNewVidOpt(){ if(newVidOptShown()) hideNewVidOpt(); else showNewVidOpt(); }
+function pickNewVideo(){ hideNewVidOpt(); try{ Android.pickVideo(); }catch(e){} }
+document.addEventListener('pointerdown', function(e){ if(video && !vidWrap.contains(e.target)) hideNewVidOpt(); });
+
+// v1.8: DRAG the caption pill with a finger or mouse (Pointer Events +
+// setPointerCapture work for both in the WebView). The overlay is
+// SHRINK-TO-FIT the pill (width:max-content), so dragging moves the pill
+// by its CENTRE and the centre is CLAMPED so the WHOLE pill stays inside
+// the frame — words can never clip at the edges. Dragging pauses the
+// video so the caption stays still. While dragging, faint dashed centre
+// guides show; near the frame centre the pill MAGNETIC-SNAPS to exactly
+// 0.5 and the guides turn solid cyan with a "◉ Center" badge. On release
+// the centre fractions are saved as style.posX/posY (0.5 = dead centre),
+// persisted via Android.setStyle and honoured by the burned-in export.
+(function(){
+  const ovEl=document.getElementById('capOverlay');
+  ovEl.addEventListener('pointerdown', function(e){
+    if(!captions.length) return;
+    if(ovEl.style.display==='none') return;
+    if(!document.getElementById('capText').textContent.trim()) return;
+    if(e.pointerType==='mouse' && e.button!==0) return;
+    e.preventDefault(); e.stopPropagation();
+    if(!vid.paused){ vid.pause(); document.getElementById('playBtn').textContent='▶'; }
+    const wr=vidWrap.getBoundingClientRect();
+    const r=ovEl.getBoundingClientRect();
+    const pillW=pillWidth(), pillH=r.height;
+    // Drag by the pill CENTRE: keep the finger's offset from the centre so
+    // the pill never jumps on grab.
+    const cx=r.left-wr.left+r.width/2, cy=r.top-wr.top+r.height/2;
+    ovEl.classList.add('dragging');
+    try{ ovEl.setPointerCapture(e.pointerId); }catch(err){}
+    // v1.12: record the down point so a plain TAP on the pill (down+up,
+    // <8px) can be told apart from a real drag — a tap shows the
+    // "New Video" option, a drag moves the caption (as before).
+    dragCap={id:e.pointerId, grabDX:e.clientX-wr.left-cx, grabDY:e.clientY-wr.top-cy, w:pillW, h:pillH, snapX:false, snapY:false, sx:e.clientX, sy:e.clientY};
+    capGuides(true,false,false);
+  });
+  ovEl.addEventListener('pointermove', function(e){
+    if(!dragCap || e.pointerId!==dragCap.id) return;
+    e.preventDefault();
+    const wrapW=vidWrap.clientWidth, wrapH=vidWrap.clientHeight;
+    const wr=vidWrap.getBoundingClientRect();
+    // Re-measure live: the pill is shrink-to-fit, so its rect is the pill.
+    dragCap.w=pillWidth(); dragCap.h=ovEl.getBoundingClientRect().height;
+    let cx=e.clientX-wr.left-dragCap.grabDX;
+    let cy=e.clientY-wr.top-dragCap.grabDY;
+    // Magnetic snap to the frame centre (15px or 5% of frame size).
+    const snapX=Math.max(15, wrapW*0.05), snapY=Math.max(15, wrapH*0.05);
+    let sx=false, sy=false;
+    if(Math.abs(cx-wrapW/2)<=snapX){ cx=wrapW/2; sx=true; }
+    if(Math.abs(cy-wrapH/2)<=snapY){ cy=wrapH/2; sy=true; }
+    // Clamp the CENTRE so the whole pill stays inside the frame (4% margin).
+    cx=clampCentre(cx, dragCap.w, wrapW);
+    cy=clampCentre(cy, dragCap.h, wrapH);
+    dragCap.snapX=sx; dragCap.snapY=sy;
+    ovEl.style.left=(cx-dragCap.w/2)+'px';
+    ovEl.style.top=(cy-dragCap.h/2)+'px';
+    positionGrip(cx-dragCap.w/2, dragCap.w, cy-dragCap.h/2, dragCap.h);
+    capGuides(true, sx, sy);
+  });
+  function endCapDrag(e){
+    if(!dragCap) return;
+    if(e && e.pointerId!==dragCap.id) return;
+    const wrapW=vidWrap.clientWidth, wrapH=vidWrap.clientHeight;
+    const left=parseFloat(ovEl.style.left)||0, top=parseFloat(ovEl.style.top)||0;
+    // v1.8: posX/posY are PILL-CENTRE fractions (0.5 = dead centre). A
+    // snapped drag saves exactly 0.5. (v1.7 saved posY as a baseline
+    // fraction — old saved values shift by ~0.22 line heights; harmless.)
+    let px=(left+dragCap.w/2)/wrapW, py=(top+dragCap.h/2)/wrapH;
+    if(dragCap.snapX) px=0.5;
+    if(dragCap.snapY) py=0.5;
+    style.posX=Math.max(0,Math.min(1,px));
+    style.posY=Math.max(0,Math.min(1,py));
+    // v1.12: a plain TAP on the pill (down+up, <8px movement) is not a
+    // drag — it shows the "New Video" option, same as tapping the video
+    // itself. Saving the (unchanged) position above is harmless.
+    const tapped = !!(e && typeof dragCap.sx==='number' && Math.hypot(e.clientX-dragCap.sx, e.clientY-dragCap.sy)<8);
+    ovEl.classList.remove('dragging');
+    dragCap=null;
+    capGuides(false,false,false);
+    try{ Android.setStyle(JSON.stringify(style)); }catch(err){}
+    syncPosBtns();
+    updateCaptionOverlay(vid.currentTime||0);
+    if(tapped) toggleNewVidOpt();
+  }
+  ovEl.addEventListener('pointerup', endCapDrag);
+  ovEl.addEventListener('pointercancel', function(e){
+    if(!dragCap) return;
+    ovEl.classList.remove('dragging');
+    dragCap=null;
+    capGuides(false,false,false);
+    updateCaptionOverlay(vid.currentTime||0); // revert to the saved position
+  });
+})();
+function togglePlay(){ if(!video){Android.toast('Pehle video import karo');return;} if(vid.paused){vid.play();document.getElementById('playBtn').textContent='⏸';}else{vid.pause();document.getElementById('playBtn').textContent='▶';} }
+function seekTo(pct){ if(!video)return; vid.currentTime=(pct/100)*duration; }
+
+// Chunk a segment's words into display groups. Single line = groups of max
+// 4 words; if the last group would be a single orphan word, rebalance the
+// last two groups so no group has just 1 word (5 words -> 3+2).
+function chunkWords(words, maxN){
+  if(!words.length) return [];
+  const groups=[];
+  for(let i=0;i<words.length;i+=maxN) groups.push(words.slice(i,i+maxN));
+  if(maxN>=4 && groups.length>1){
+    const last=groups[groups.length-1];
+    if(last.length===1){
+      const prev=groups[groups.length-2];
+      last.unshift(prev.pop());
+    }
+  }
+  return groups;
+}
+function updateCaptionOverlay(t){
+  const ov=document.getElementById('capOverlay'), tx=document.getElementById('capText');
+  let cur=null;
+  for(const c of captions){ if(t>=c.start && t<c.end){cur=c;break;} }
+  if(!cur){ tx.innerHTML=''; ov.style.display='none'; document.getElementById('capGrip').style.display='none'; return; }
+  ov.style.display='block';
+  // v1.7: position is applied by applyCapPos() below (preset class or the
+  // hand-dragged posX/posY). It is NOT set here any more.
+  // All three modes are chunked display of the same segment, each chunk
+  // shown for its proportional slice of the segment time:
+  // word = 1 word, duo = 2 words, line = 3-4 words per chunk.
+  const words=String(cur.text).split(/\s+/);
+  const prog=(cur.end>cur.start)?(t-cur.start)/(cur.end-cur.start):0;
+  const idx=Math.min(words.length-1,Math.max(0,Math.floor(prog*words.length)));
+  const mode=style.mode||'line';
+  const maxN = mode==='word'?1 : mode==='duo'?2 : 4;
+  const groups=chunkWords(words,maxN);
+  const gi=Math.min(groups.length-1,Math.floor(prog*groups.length));
+  const show=groups[gi];
+  // v1.10: explicit direction (see isRtlText) — dir="auto" on #capText can
+  // resolve LTR when a chunk starts with an emoji/number, laying the word
+  // spans out backwards. First spoken word must be at the RIGHT for Urdu.
+  tx.dir = isRtlText(show.join(' ')) ? 'rtl' : 'ltr';
+  let start=0; for(let g=0;g<gi;g++) start+=groups[g].length;
+  // Emojis ON forces word-highlight ON (both preview and export).
+  const hlOn = style.highlight || style.emojis;
+  // Fewer words on screen = bigger text. Line chunks are clearly bigger
+  // than the old full-line text (which was 1.0x).
+  const fsMul = mode==='word'?1.6 : mode==='duo'?1.25 : 1.3;
+  // v1.5: SINGLE LINE ONLY — fit to the RENDERED width. The v1.4 canvas
+  // measure was the bug: canvas measureText with a 'system-ui' font
+  // underestimates Urdu — the phone renders Nastaliq, which is far wider —
+  // so the loop thought the chunk fit while the real pill overflowed the
+  // 9:16 frame and got clipped at the edge. Now the font is set first,
+  // then the REAL element is measured (getBoundingClientRect on the pill)
+  // and shrunk until it fits the overlay, min 12px. overflow:hidden on
+  // the overlay is the safety net: the pill can never paint outside the
+  // frame. dir="auto" (on #capText) lays Urdu out right-to-left so the
+  // pill hugs the text tightly.
+  let px = Math.max(12, Math.round(previewBase()*style.size/100*fsMul));
+  let html;
+  if(mode==='line'){
+    html=show.map((w,i)=> (hlOn && (start+i)===idx) ? '<span class="hl">'+esc(w)+'</span>' : esc(w)).join(' ');
+  } else {
+    // v1.11: in word/duo modes the shown words ARE the current words —
+    // wrapping them all in .hl painted everything yellow and hid the
+    // chosen colour (preview and export alike). No highlight here: the
+    // words render in the chosen colour, same as the export.
+    html=show.map(w=>esc(w)).join(' ');
+  }
+  tx.innerHTML = style.bg? '<span class="bg">'+html+'</span>' : html;
+  tx.style.color=style.color;
+  tx.style.fontWeight=style.bold?'700':'400';
+  ov.style.fontSize = px+'px';
+  let guard=0;
+  while (px > 12 && guard++ < 60) {
+    // v1.8: measure the TRUE width — pillWidth() reads scrollWidth, the
+    // UNCLIPPED content width. getBoundingClientRect reports the CLIPPED
+    // box when the pill is wider than the frame, so the loop used to stop
+    // early while words were still cut (the v1.7 drag bug: the overlay
+    // was frozen to the pill width at drag start, the next chunk was
+    // wider, and the loop measured the clipped box and never shrank it).
+    const avail = vidWrap.clientWidth * 0.92;
+    if (!avail) break;
+    if (pillWidth() <= avail) break;
+    px = Math.max(12, px - 1);
+    ov.style.fontSize = px+'px';
+  }
+  // v1.7: draggable position — skipped mid-drag (the drag handler owns it).
+  if (!dragCap) applyCapPos();
+}
+
+// ---------- v1.8: DRAG captions by hand ----------
+// The overlay is shrink-to-fit (width:max-content) and is ALWAYS positioned
+// by explicit left/top px in applyCapPos, whether by a preset (Top/Center/
+// Bottom box offsets) or by the hand-dragged fractions style.posX/posY:
+// posX/posY are PILL-CENTRE fractions (0.5 = dead centre) — the same
+// convention as the Java export, so the export lands where the drag put
+// it. (v1.7 saved posY as a TEXT-BASELINE fraction; old saved values
+// shift by ~0.22 line heights under the new reading — harmless.)
+let dragCap=null; // {id, grabDX, grabDY, w, h, snapX, snapY} while a drag is live
+function hasCustomPos(){
+  return typeof style.posX==='number' && style.posX>=0 && typeof style.posY==='number' && style.posY>=0;
+}
+// v1.8: TRUE pill width — scrollWidth is the unclipped content width.
+// getBoundingClientRect reports the CLIPPED box when the pill is wider
+// than the frame, which is exactly how v1.7's drag clipped words.
+function pillWidth(){
+  const tx=document.getElementById('capText');
+  const bg=tx.querySelector('.bg');
+  const el=bg||tx;
+  return Math.max(el.scrollWidth, el.getBoundingClientRect().width);
+}
+// Clamp a pill CENTRE so the whole pill stays inside the frame (4% margin).
+// If the pill is wider than the frame allows, the centre is forced to the
+// middle (the only spot where it fits best).
+function clampCentre(c, size, total){
+  const m=total*0.04;
+  const lo=Math.min(size/2+m, total/2);
+  const hi=Math.max(total-size/2-m, total/2);
+  return Math.max(lo, Math.min(hi, c));
+}
+// v1.8: centre guides + snap badge, visible ONLY while dragging. The
+// guides are faint dashed; the one(s) snapped to centre turn solid cyan,
+// and the "◉ Center" badge lights up only while snapped.
+function capGuides(show, snapX, snapY){
+  const gv=document.getElementById('capGuideV'), gh=document.getElementById('capGuideH'), bd=document.getElementById('capCenterBadge');
+  if(!gv||!gh||!bd) return;
+  gv.style.display=show?'block':'none';
+  gh.style.display=show?'block':'none';
+  gv.classList.toggle('snap', !!snapX);
+  gh.classList.toggle('snap', !!snapY);
+  bd.style.display=(show&&(snapX||snapY))?'block':'none';
+}
+function positionGrip(left, w, top, h){
+  const grip=document.getElementById('capGrip');
+  if(!grip) return;
+  const wrapW=vidWrap.clientWidth, wrapH=vidWrap.clientHeight;
+  const cx=left+w/2;
+  let gt=top-18;
+  if(gt<2) gt=top+h+4;
+  if(gt+14>wrapH) gt=Math.max(0,wrapH-14);
+  grip.style.left=Math.max(6,Math.min(wrapW-14,cx-7))+'px';
+  grip.style.top=gt+'px';
+  grip.style.display='block';
+}
+function applyCapPos(){
+  const ov=document.getElementById('capOverlay'), tx=document.getElementById('capText');
+  const wrapW=vidWrap.clientWidth, wrapH=vidWrap.clientHeight;
+  if(!wrapW||!wrapH) return;
+  const pillW=pillWidth();
+  const ovH=ov.getBoundingClientRect().height;
+  // v1.8: presets and drag share one path — the pill CENTRE is computed,
+  // clamped inside the frame, then left/top follow from it. Preset box
+  // offsets match the old .pos-top/.pos-center/bottom:8% positions.
+  let cx, cy;
+  if(hasCustomPos()){
+    cx=style.posX*wrapW; cy=style.posY*wrapH;
+  } else if(style.position==='top'){
+    cx=wrapW/2; cy=wrapH*0.08+ovH/2;
+  } else if(style.position==='center'){
+    cx=wrapW/2; cy=wrapH*0.46+ovH/2;
+  } else {
+    cx=wrapW/2; cy=wrapH-ovH-wrapH*0.08+ovH/2;
+  }
+  cx=clampCentre(cx, pillW, wrapW);
+  cy=clampCentre(cy, ovH, wrapH);
+  ov.style.left=(cx-pillW/2)+'px'; ov.style.top=(cy-ovH/2)+'px';
+  ov.style.right='auto'; ov.style.bottom='auto';
+  positionGrip(cx-pillW/2, pillW, cy-ovH/2, ovH);
+}
+
+// ---------- captions ----------
+// v1.5: the trim section was removed entirely (Dilawar's word). Export always
+// uses the full video at normal speed: trimStart=0, trimEnd=duration,
+// ranges=[{0,duration}], speed=1, rotate=0, mute=false (set in __onVideo).
+function renderCaps(){
+  const el=document.getElementById('capList');
+  document.getElementById('capsSection').style.display = captions.length? 'block':'none';
+  if(!captions.length){ el.innerHTML=''; return; }
+  el.innerHTML=captions.map((c,i)=>
+    '<div class="capItem"><div class="meta"><input type="number" step="0.1" min="0" value="'+c.start.toFixed(1)+'" onchange="capTime('+i+',\'start\',this.value)"> → '+
+    '<input type="number" step="0.1" min="0" value="'+c.end.toFixed(1)+'" onchange="capTime('+i+',\'end\',this.value)">'+
+    '<span style="flex:1"></span><button class="btn danger small" onclick="delCap('+i+')">🗑</button></div>'+
+    '<textarea dir="auto" onchange="capText('+i+',this.value)">'+esc(c.text)+'</textarea></div>').join('');
+  // v1.6: the section is visible NOW — re-fit the mode-card samples and the
+  // live demo against real widths. (Fitting while hidden measures 0 and is
+  // meaningless; fitSample now skips that case instead of shrinking to floor.)
+  syncModeSamples();
+  renderLiveDemo();
+}
+function capTime(i,k,v){ captions[i][k]=parseFloat(v)||0; }
+function capText(i,v){ captions[i].text=v; }
+function delCap(i){ captions.splice(i,1); renderCaps(); }
+function autoCaptions(){
+  if(!video){Android.toast('Pehle video import karo');return;}
+  const lang=document.getElementById('capLang').value;
+  const st=document.getElementById('capStatus');
+  st.textContent='Generating…';
+  document.getElementById('autoBtn').disabled=true;
+  window.__capCb=function(res){
+    document.getElementById('autoBtn').disabled=false;
+    if(typeof res==='string' && res.indexOf('ERROR:')===0){ var m=res.substring(6); st.textContent=m; Android.toast(m); return; }
+    try{
+      const arr=JSON.parse(res);
+      if(!arr.length){ st.textContent='No speech found.'; return; }
+      captions=arr; renderCaps();
+      st.textContent='✔ '+arr.length+' captions';
+      Android.toast(arr.length+' captions ✔');
+    }catch(e){ st.textContent='Could not read reply.'; }
+  };
+  Android.transcribeAsync(lang, !!style.emojis, 'window.__capCb');
+}
+
+// ---------- style ----------
+// v1.5: text overlay UI was removed with the trim section; textOv stays empty
+// (export draws nothing for it).
+function emojiChanged(){
+  style.emojis=document.getElementById('emojiChk').checked;
+  styleChanged();
+}
+function styleChanged(){
+  if(!style.mode) style.mode='line'; // styles saved by v1.1 have no mode
+  style.size=+document.getElementById('stSize').value;
+  style.bold=swOn('stBold'); style.bg=swOn('stBg'); style.highlight=swOn('stHl');
+  style.color=document.getElementById('stColor').value;
+  style.position=document.getElementById('stPos').value;
+  document.getElementById('stSizeLbl').textContent=style.size+'%';
+  try{ Android.setStyle(JSON.stringify(style)); }catch(e){}
+  syncPreset();
+  syncModeCards();
+  syncSwatches();
+  syncPosBtns();
+  syncModeSamples();
+  renderLiveDemo();
+  updateCaptionOverlay(vid.currentTime||0);
+}
+function setSwatch(c){ document.getElementById('stColor').value=c; styleChanged(); }
+function syncSwatches(){
+  document.querySelectorAll('#swatches .sw').forEach(function(el){
+    el.classList.toggle('on', el.getAttribute('data-c').toUpperCase()===(style.color||'').toUpperCase());
+  });
+}
+function setPos(p){
+  // v1.7: a preset tap replaces the hand-dragged position.
+  delete style.posX; delete style.posY;
+  document.getElementById('stPos').value=p; styleChanged();
+}
+function syncPosBtns(){
+  // v1.7: with a hand-dragged position saved, no preset is selected.
+  const custom=hasCustomPos();
+  ['top','center','bottom'].forEach(function(p){
+    const el=document.getElementById('pos-'+p);
+    if(el) el.classList.toggle('on', !custom && style.position===p);
+  });
+}
+function setCapMode(m){ style.mode=m; syncModeCards(); styleChanged(); }
+function syncModeCards(){
+  ['word','duo','line'].forEach(function(m){
+    const el=document.getElementById('md-'+m);
+    if(el) el.classList.toggle('on', style.mode===m);
+  });
+}
+// v1.5: each mode card shows a LIVE example in the current style — one big
+// word, two words, a 3-4-word line — in the chosen colour/bold, shrunk to
+// fit its card.
+function fitSample(el, startPx){
+  let px=startPx; el.style.fontSize=px+'px';
+  let guard=0;
+  while (px > 10 && guard++ < 40) {
+    const card=el.parentElement;
+    if (!card) break;
+    // v1.6: hidden section measures 0 — do NOT shrink to the 10px floor on
+    // a meaningless measurement; the real fit happens in renderCaps() once
+    // the section is visible.
+    if (card.clientWidth === 0) break;
+    if (el.getBoundingClientRect().width <= card.clientWidth - 16) break;
+    px = Math.max(10, px - 1);
+    el.style.fontSize = px+'px';
+  }
+}
+function syncModeSamples(){
+  const samples={word:['md-s-word',24],duo:['md-s-duo',20],line:['md-s-line',17]};
+  for (const m in samples) {
+    const el=document.getElementById(samples[m][0]);
+    if (!el) continue;
+    el.style.color=style.color;
+    el.style.fontWeight=style.bold?'800':'400';
+    fitSample(el, samples[m][1]);
+  }
+}
+// v1.5: LIVE preview strip — a sample caption in the current mode+style,
+// cycling its highlight word every ~600ms so the effect is visible without
+// playing the video.
+const DEMO_WORDS=['السلام','علیکم','دوستو'];
+let demoTick=0;
+function renderLiveDemo(){
+  const el=document.getElementById('liveDemoText');
+  const sec=document.getElementById('capsSection');
+  if(!el || !sec || sec.style.display==='none') return;
+  const mode=style.mode||'line';
+  const maxN=mode==='word'?1:mode==='duo'?2:4;
+  const groups=chunkWords(DEMO_WORDS,maxN);
+  const gi=demoTick%groups.length;
+  const show=groups[gi];
+  // v1.10: explicit direction, same as the preview overlay.
+  el.dir = isRtlText(show.join(' ')) ? 'rtl' : 'ltr';
+  let start=0; for(let g=0;g<gi;g++) start+=groups[g].length;
+  const hlIdx=demoTick%DEMO_WORDS.length;
+  const hlOn=style.highlight||style.emojis;
+  let html;
+  if(mode==='line'){
+    html=show.map((w,i)=> (hlOn && (start+i)===hlIdx) ? '<span class="hl">'+esc(w)+'</span>' : esc(w)).join(' ');
+  } else {
+    // v1.11: same as the preview overlay — in word/duo modes no .hl on
+    // any word, so the chosen colour shows instead of always-yellow.
+    html=show.map(w=>esc(w)).join(' ');
+  }
+  el.innerHTML = style.bg? '<span class="bg">'+html+'</span>' : html;
+  el.style.color=style.color;
+  el.style.fontWeight=style.bold?'700':'400';
+  const fsMul=mode==='word'?1.6:mode==='duo'?1.25:1.3;
+  let px=Math.max(14, Math.round(20*fsMul));
+  el.style.fontSize=px+'px';
+  let guard=0;
+  while (px > 12 && guard++ < 40) {
+    const avail=el.parentElement.clientWidth - 20;
+    if (!avail) break;
+    if (el.getBoundingClientRect().width <= avail) break;
+    px=Math.max(12, px-1);
+    el.style.fontSize=px+'px';
+  }
+}
+// Style presets: one tap sets the underlying style controls.
+const PRESETS={
+  white:{size:5,bold:true,color:'#FFFFFF',bg:true,position:'bottom',highlight:true},
+  yellow:{size:6,bold:true,color:'#FFD60A',bg:true,position:'bottom',highlight:false},
+  big:{size:8,bold:true,color:'#FFFFFF',bg:true,position:'bottom',highlight:true}
+};
+function applyPreset(name){
+  const p=PRESETS[name]; if(!p) return;
+  // v1.7: a preset also replaces the hand-dragged position.
+  delete style.posX; delete style.posY;
+  document.getElementById('stSize').value=p.size;
+  document.getElementById('stColor').value=p.color;
+  document.getElementById('stPos').value=p.position;
+  ['stBold','stBg','stHl'].forEach((id,i)=>{
+    const key=['bold','bg','highlight'][i];
+    document.getElementById(id).classList.toggle('on', !!p[key]);
+  });
+  styleChanged();
+}
+function syncPreset(){
+  for(const name in PRESETS){
+    const p=PRESETS[name];
+    const match = style.size===p.size && style.bold===p.bold && style.color.toUpperCase()===p.color.toUpperCase()
+      && style.bg===p.bg && style.position===p.position && style.highlight===p.highlight;
+    const el=document.getElementById('pr-'+name);
+    if(el) el.classList.toggle('on', match);
+  }
+}
+
+// ---------- export ----------
+function buildSpec(){
+  return JSON.stringify({
+    trimStart: trimStart, trimEnd: trimEnd,
+    ranges: ranges, speed: speed, rotate: rotate, mute: mute,
+    captions: captions, style: style, textOverlay: textOv,
+    burnIn: captions.length>0
+  });
+}
+function doExport(){
+  if(!video){Android.toast('Pehle video import karo');return;}
+  if(!ranges.length){Android.toast('No video part left to export');return;}
+  document.getElementById('expBtn').disabled=true;
+  document.getElementById('progressWrap').style.display='block';
+  document.getElementById('result').innerHTML='';
+  setProgress(2,'Exporting…');
+  window.__expCb=function(res){
+    document.getElementById('expBtn').disabled=false;
+    try{
+      const r=JSON.parse(res);
+      if(r.error){ setProgress(0,'Failed'); document.getElementById('result').innerHTML='❌ Export failed: '+esc(r.error); Android.toast('Export failed'); return; }
+      setProgress(100,'Done ✔');
+      if(r.fallback){
+        document.getElementById('result').innerHTML='⚠ Burn-in failed — plain video saved: <b>'+esc(r.name)+'</b>';
+        Android.toast('Plain video saved (burn-in failed)');
+      } else {
+        document.getElementById('result').innerHTML='✔ <b>'+esc(r.name)+'</b>';
+      }
+      document.getElementById('shareBtn').style.display='inline-block';
+      Android.toast('Exported ✔');
+    }catch(e){ document.getElementById('result').innerHTML='❌ Export failed.'; }
+  };
+  window.__expProg=function(p){
+    try{ const o=JSON.parse(p); setProgress(o.pct, o.msg||''); }catch(e){}
+  };
+  Android.exportVideoAsync(buildSpec(), 'window.__expCb', 'window.__expProg');
+}
+function setProgress(pct,msg){
+  document.getElementById('progressFill').style.width=pct+'%';
+  document.getElementById('progressMsg').textContent=pct+'% '+msg;
+}
+// v1.5: the captions-file export option was removed (Dilawar's word).
+// Only the one big "Export Video" button remains. (The Java bridge for it
+// is still there but uncalled; the burn-in fallback still writes a
+// captions file next to the plain video when burn-in fails.)
+
+// ---------- settings ----------
+function openSettings(){
+  document.getElementById('apiKey').value=Android.getKey();
+  document.getElementById('modelId').value=Android.getModelId();
+  document.getElementById('modal').classList.add('open');
+}
+// v1.14: update banner — called from Java when GitHub has a newer release.
+// Update opens the APK download (same keystore = installs over the old
+// version, no uninstall); Later just hides the banner for this launch.
+window.__updUrl='';
+window.showUpdateBanner=function(ver,url){
+  window.__updUrl=url;
+  document.getElementById('updTxt').textContent='✦ New version '+ver+' available';
+  document.getElementById('updBanner').classList.add('show');
+};
+function updateNow(){ if(window.__updUrl){ try{ Android.openUrl(window.__updUrl); }catch(e){} } }
+function hideUpdBanner(){ document.getElementById('updBanner').classList.remove('show'); }
+function closeSettings(){ document.getElementById('modal').classList.remove('open'); }
+function saveKey(){ Android.setKey(document.getElementById('apiKey').value); document.getElementById('keyStatus').textContent='Saved ✔'; }
+function saveModel(){ Android.setModelId(document.getElementById('modelId').value); }
+function testKey(){
+  const k=document.getElementById('apiKey').value.trim();
+  const m=document.getElementById('modelId').value.trim()||'gemini-2.5-flash';
+  if(!k){ document.getElementById('keyStatus').textContent='Key khali hai'; return; }
+  document.getElementById('keyStatus').textContent='Testing…';
+  window.__testCb=function(r){
+    document.getElementById('keyStatus').textContent = (r==='OK') ? '✔ Key works!' : r;
+  };
+  Android.testKeyAsync(k, m, 'window.__testCb');
+}
+
+// ---------- init ----------
+(function(){
+  try{
+    const lang=Android.getLang()||'ur';
+    document.getElementById('capLang').value=lang;
+    const st=Android.getStyle();
+    if(st){ style=JSON.parse(st);
+      // v1.6: caption back to BOTTOM. His v1.5 screenshot showed the caption
+      // at the TOP of the frame, clipped by the screen edge. Bottom (8%) is
+      // the default and the only position that can never be cut by the top
+      // edge; the Top/Center/Bottom chips still let him move it, and the
+      // sticky stage now keeps any position fully visible.
+      if (style.position === 'top') { style.position = 'bottom'; try{ Android.setStyle(JSON.stringify(style)); }catch(e){} }
+      document.getElementById('stSize').value=style.size;
+      document.getElementById('stColor').value=style.color||'#FFFFFF';
+      document.getElementById('stPos').value=style.position||'bottom';
+      ['stBold','stBg','stHl'].forEach((id,i)=>{
+        const key=['bold','bg','highlight'][i];
+        document.getElementById(id).classList.toggle('on', !!style[key]);
+      });
+      document.getElementById('emojiChk').checked=!!style.emojis;
+      styleChanged();
+    }
+    const cur=Android.getCurrentVideo();
+    if(cur) window.__onVideo(cur);
+  }catch(e){}
+  syncModeSamples();
+  renderLiveDemo();
+  setInterval(function(){ demoTick++; renderLiveDemo(); }, 600);
+})();
+</script>
+</body>
+</html>
